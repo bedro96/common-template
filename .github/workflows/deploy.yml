@@ -1,0 +1,59 @@
+name: Deploy to Azure Container Apps
+
+on:
+  workflow_run:
+    workflows: ["Build and Push Docker Image"]
+    types:
+      - completed
+    branches:
+      - main
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  REGISTRY_NAME: your-registry
+  IMAGE_NAME: your-app
+  ACR_RESOURCE_GROUP: your-resource-group
+  CONTAINER_APP_NAME: your-container-app
+  CONTAINER_APP_RG: your-app-resource-group
+  CONTAINER_APP_ENV: your-container-app-env
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Azure Login via OIDC
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Get image tag
+        id: image-tag
+        run: |
+          echo "tag=sha-$(git rev-parse HEAD)" >> $GITHUB_OUTPUT
+
+      - name: Render container app config
+        run: |
+          pip install jinja2-cli
+          jinja2 .github/templates/container-app.yaml.j2 \
+            -D container_app_name=${{ env.CONTAINER_APP_NAME }} \
+            -D registry_name=${{ env.REGISTRY_NAME }} \
+            -D image_name=${{ env.IMAGE_NAME }} \
+            -D image_tag=${{ steps.image-tag.outputs.tag }} \
+            > /tmp/container-app.yaml
+
+      - name: Deploy to Azure Container Apps
+        run: |
+          az containerapp update \
+            --name ${{ env.CONTAINER_APP_NAME }} \
+            --resource-group ${{ env.CONTAINER_APP_RG }} \
+            --yaml /tmp/container-app.yaml
